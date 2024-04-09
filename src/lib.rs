@@ -1,36 +1,104 @@
-use ark_crypto_primitives::sponge::{
-    constraints::{CryptographicSpongeVar, SpongeWithGadget},
-    Absorb, CryptographicSponge,
+const NOVA_TARGET: &str = "layerX::bitfold";
+use std::fmt::Display;
+use std::marker::PhantomData;
+
+mod bitcoin;
+use bitcoin::BitcoinHeader;
+use nexus_nova::circuits::nova::sequential::*;
+use nexus_nova::circuits::nova::*;
+use nexus_nova::commitment::CommitmentScheme;
+use nexus_nova::folding::nova::cyclefold;
+use nexus_nova::{pedersen::PedersenCommitment, poseidon_config};
+
+// ark
+use ark_crypto_primitives::{
+    crh::{
+        self,
+        sha256::{
+            constraints::{Sha256Gadget, UnitVar},
+            Sha256,
+        },
+        CRHSchemeGadget,
+    },
+    sponge::{
+        constraints::{CryptographicSpongeVar, SpongeWithGadget},
+        poseidon::PoseidonSponge,
+        Absorb, CryptographicSponge,
+    },
 };
 use ark_ec::short_weierstrass::{Projective, SWCurveConfig};
-use ark_ff::{AdditiveGroup, PrimeField};
-use ark_r1cs_std::R1CSVar;
-use ark_relations::r1cs::{ConstraintSystem, SynthesisMode};
+use ark_ff::{AdditiveGroup, Field, PrimeField};
+use ark_r1cs_std::{
+    fields::{fp::FpVar, FieldVar},
+    prelude::*,
+    R1CSVar,
+};
+use ark_relations::r1cs::{ConstraintSystem, ConstraintSystemRef, SynthesisError, SynthesisMode};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use std::fmt::Display;
+use tracing_subscriber::{
+    filter, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt,
+};
+
+#[derive(Debug, Default)]
+pub struct BitcoinHeaderCircuit<F: Field> {
+    header: BitcoinHeader,
+    _p: PhantomData<F>,
+}
+
+impl<F: PrimeField> StepCircuit<F> for BitcoinHeaderCircuit<F> {
+    const ARITY: usize = 1;
+    fn generate_constraints(
+        &self,
+        cs: ConstraintSystemRef<F>,
+        i: &FpVar<F>,
+        z: &[FpVar<F>],
+    ) -> Result<Vec<FpVar<F>>, SynthesisError> {
+        // serialize the header to bytes
+        let header_le_bytes = self.header.to_bytes();
+
+        // allocate variables for the header in input
+        let allocated_header_bytes = UInt8::new_witness_vec(
+            ark_relations::ns!(cs, "block header bytes"),
+            &header_le_bytes,
+        )?;
+
+        // variables for previous block hash extracted from current block header
+        let header_previous_hash = &allocated_header_bytes[4..36];
+
+        // variables for previous block hash from IVC input (passed as IVC input z_{i-1})
+        let mut input_previous_hash: Vec<UInt8<F>> = Vec::new();
+        for z_fp in z {
+            let bytes = z_fp.to_bytes()?;
+            input_previous_hash.push(bytes[0].clone());
+        }
+        // enforce the previous block hash from block header be equal with the hash that is passed as input.
+        header_previous_hash.enforce_equal(&input_previous_hash)?;
+
+        // ToDo: enforce the block hash is under target difficulty
+
+        // calculate and allocate block hash
+        let digest = <Sha256Gadget<F> as CRHSchemeGadget<Sha256, F>>::evaluate(
+            &UnitVar::default(),
+            &allocated_header_bytes,
+        )?;
+
+        // convert digest to z_{out}
+
+        let mut z_out: Vec<FpVar<F>> = Vec::new();
+        for byte in digest.0 {
+            let fp_var = Boolean::le_bits_to_fp_var(&byte.to_bits_le()?)?;
+            z_out.push(fp_var);
+        }
+
+        //let previous_block_hash = z.
+        Ok(z_out)
+    }
+}
 
 #[cfg(test)]
 pub(crate) mod tests {
 
-    const NOVA_TARGET: &str = "layerX::bitfold";
-
     use super::*;
-    use nexus_nova::circuits::nova::sequential::*;
-    use nexus_nova::circuits::nova::*;
-    use nexus_nova::commitment::CommitmentScheme;
-    use nexus_nova::folding::nova::cyclefold;
-    use nexus_nova::{pedersen::PedersenCommitment, poseidon_config};
-    use std::marker::PhantomData;
-
-    // ark
-    use ark_crypto_primitives::sponge::poseidon::PoseidonSponge;
-    use ark_ff::Field;
-    use ark_r1cs_std::fields::{fp::FpVar, FieldVar};
-    use ark_relations::r1cs::{ConstraintSystemRef, SynthesisError};
-
-    use tracing_subscriber::{
-        filter, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt,
-    };
 
     #[derive(Debug, Default)]
     pub struct CubicCircuit<F: Field>(PhantomData<F>);
