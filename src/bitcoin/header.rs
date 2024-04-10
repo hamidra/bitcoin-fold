@@ -11,18 +11,18 @@ use super::Sha256Hash;
 /// ref code: https://github.com/bitcoin/bitcoin/blob/b5d21182e5a66110ce2796c2c99da39c8ebf0d72/src/primitives/block.h#L21
 /// ref doc: https://developer.bitcoin.org/reference/block_chain.html
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct BitcoinHeader {
     // header
-    version: u32,
-    hash_prev_block: Sha256Hash,
-    hash_merkle_root: Sha256Hash,
+    pub version: u32,
+    pub hash_prev_block: Sha256Hash,
+    pub hash_merkle_root: Sha256Hash,
     // timestamp
-    timestamp: u32,
+    pub timestamp: u32,
     // target value for the difficulty, which specifies the number of zero bits in the beginning of the target blockhash
-    target_bits: u32,
+    pub target_bits: u32,
     // The nonce that was used by the miner to get the block hash with `diffBits` difficulty
-    nonce: u32,
+    pub nonce: u32,
 }
 
 impl BitcoinHeader {
