@@ -129,7 +129,7 @@ pub(crate) mod bitcoin_fold_tests {
             hash_prev_block: [1; 32].to_vec(),
             hash_merkle_root: [0; 32].to_vec(),
             timestamp: 0u32,
-            target_bits: 0u32,
+            target_bits: [0; 4].to_vec(),
             nonce: 0u32,
         };
         let circuit = BitcoinHeaderCircuit::<G1::ScalarField> {

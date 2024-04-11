@@ -1,4 +1,4 @@
-use super::Sha256Hash;
+use serde::{Deserialize, Serialize};
 
 /// Bitcoin block header
 /// Nodes collect new transactions into a block, hash them into a hash tree,
@@ -11,16 +11,15 @@ use super::Sha256Hash;
 /// ref code: https://github.com/bitcoin/bitcoin/blob/b5d21182e5a66110ce2796c2c99da39c8ebf0d72/src/primitives/block.h#L21
 /// ref doc: https://developer.bitcoin.org/reference/block_chain.html
 
-#[derive(Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct BitcoinHeader {
-    // header
     pub version: u32,
-    pub hash_prev_block: Sha256Hash,
-    pub hash_merkle_root: Sha256Hash,
+    pub hash_prev_block: Vec<u8>,
+    pub hash_merkle_root: Vec<u8>,
     // timestamp
     pub timestamp: u32,
     // target value for the difficulty, which specifies the number of zero bits in the beginning of the target blockhash
-    pub target_bits: u32,
+    pub target_bits: Vec<u8>,
     // The nonce that was used by the miner to get the block hash with `diffBits` difficulty
     pub nonce: u32,
 }
@@ -34,7 +33,7 @@ impl BitcoinHeader {
         result.extend_from_slice(&self.hash_prev_block);
         result.extend_from_slice(&self.hash_merkle_root);
         result.extend_from_slice(&self.timestamp.to_le_bytes());
-        result.extend_from_slice(&self.target_bits.to_le_bytes());
+        result.extend_from_slice(&self.target_bits);
         result.extend_from_slice(&self.nonce.to_le_bytes());
 
         result
@@ -52,7 +51,7 @@ pub(crate) mod test {
             hash_prev_block: [0; 32].to_vec(),
             hash_merkle_root: [0; 32].to_vec(),
             timestamp: 0u32,
-            target_bits: 0u32,
+            target_bits: [0; 4].to_vec(),
             nonce: 0u32,
         };
         let bytes: Vec<u8> = header.to_bytes();
@@ -67,7 +66,7 @@ pub(crate) mod test {
             hash_prev_block: [0; 32].to_vec(),
             hash_merkle_root: [0; 32].to_vec(),
             timestamp: 0u32,
-            target_bits: 0u32,
+            target_bits: [0; 4].to_vec(),
             nonce: 0u32,
         };
         let bytes: Vec<u8> = header.to_bytes();
