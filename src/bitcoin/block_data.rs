@@ -83,7 +83,7 @@ impl BlockReader {
 }
 
 #[cfg(test)]
-pub(crate) mod test {
+mod test {
     use super::*;
 
     #[test]

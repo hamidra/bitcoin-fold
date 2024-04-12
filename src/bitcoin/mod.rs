@@ -1,4 +1,4 @@
-mod block_data;
+pub mod block_data;
 mod header;
 
 pub(crate) mod data {

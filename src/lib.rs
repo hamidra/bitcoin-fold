@@ -68,24 +68,30 @@ impl<F: PrimeField> StepCircuit<F> for BitcoinHeaderCircuit<F> {
         let mut input_previous_hash: Vec<UInt8<F>> = Vec::new();
         for fp in z {
             let bytes = fp.to_bytes()?;
-            // take the 1st byte since the signature bytes are serialized in z in little endian
+            // take the 1st byte since the signature bytes are serialized in z in little-endian
             input_previous_hash.push(bytes[0].clone());
         }
 
-        // enforce the previous block hash from block header be equal with hash that is passed as input.
+        // enforce the previous block hash from block header to be equal with hash that is passed in input z_{i-1}.
         header_previous_hash.enforce_equal(&input_previous_hash)?;
 
         // ToDo: enforce the block hash is under target_bits difficulty
 
-        // calculate and allocate block hash
-        let digest = <Sha256Gadget<F> as CRHSchemeGadget<Sha256, F>>::evaluate(
+        // calculate and allocate block hash (bitcoin does double sha256 hash as sha256(sha256(header)) a.k.a sha256d)
+        let header_digest = <Sha256Gadget<F> as CRHSchemeGadget<Sha256, F>>::evaluate(
             &UnitVar::default(),
             &allocated_header_bytes,
+        )?;
+        let digest_digest = <Sha256Gadget<F> as CRHSchemeGadget<Sha256, F>>::evaluate(
+            &UnitVar::default(),
+            &header_digest.0,
         )?;
 
         // convert digest to FpVar for z_out
         let mut z_out: Vec<FpVar<F>> = Vec::new();
-        for byte in digest.0 {
+        for byte in digest_digest.0 {
+            // convert to FpVar for output
+            // ToDo: find a better solution to convert UInt8 bytes directly to FpVar with no intermediate bit conversion
             let fp_var = Boolean::le_bits_to_fp_var(&byte.to_bits_le()?)?;
             z_out.push(fp_var);
         }
@@ -97,10 +103,10 @@ impl<F: PrimeField> StepCircuit<F> for BitcoinHeaderCircuit<F> {
 
 #[cfg(test)]
 pub(crate) mod bitcoin_fold_tests {
-
-    use ark_crypto_primitives::crh::CRHScheme;
-
     use super::*;
+    use crate::bitcoin::block_data::BlockReader;
+    use crate::bitcoin::data::test_json::TEST_JSON_RPC;
+    use ark_crypto_primitives::crh::CRHScheme;
 
     #[test]
     fn ivc_base_step() {
@@ -123,20 +129,26 @@ pub(crate) mod bitcoin_fold_tests {
         C2: CommitmentScheme<Projective<G2>, SetupAux = ()>,
     {
         let ro_config = poseidon_config();
-        let header = BitcoinHeader {
-            version: 0u32,
-            hash_prev_block: [1; 32].to_vec(),
-            hash_merkle_root: [0; 32].to_vec(),
-            timestamp: 0u32,
-            target_bits: [0; 4].to_vec(),
-            nonce: 0u32,
-        };
+
+        // read a test block
+        let block_reader = BlockReader::new_from_json(TEST_JSON_RPC).unwrap();
+        let header = block_reader.get_block_header(838637).unwrap();
+
         let circuit = BitcoinHeaderCircuit::<G1::ScalarField> {
             header: header.clone(),
             _p: PhantomData,
         };
-        let z_0 = vec![G1::ScalarField::from(0); 32];
+
+        // pass in previous block hash
+        let z_0: Vec<G1::ScalarField> = header
+            .hash_prev_block
+            .iter()
+            .map(|byte| G1::ScalarField::from(byte.clone()))
+            .collect();
+
+        // run IVC for one step
         let num_steps = 1;
+
         println!("-> IVC started!");
 
         let params = PublicParams::<
@@ -156,18 +168,20 @@ pub(crate) mod bitcoin_fold_tests {
         recursive_snark.verify(&params, num_steps).unwrap();
         println!("-> Proof is verified!");
 
+        // check z_i is equal to the final block hash
         let header_digest = <Sha256 as CRHScheme>::evaluate(&(), header.to_bytes()).unwrap();
-        let header_digest_scalars: Vec<G1::ScalarField> = header_digest
+        let digest_digest = <Sha256 as CRHScheme>::evaluate(&(), header_digest).unwrap();
+        let digest_digest_scalars: Vec<G1::ScalarField> = digest_digest
             .iter()
             .map(|byte| G1::ScalarField::from(byte.clone()))
             .collect();
-        assert_eq!(recursive_snark.z_i(), header_digest_scalars);
+        assert_eq!(recursive_snark.z_i(), digest_digest_scalars);
 
         Ok(())
     }
 
-    /*#[test]
-    fn ivc_multiple_steps() {
+    #[test]
+    /*fn ivc_multiple_steps() {
         ivc_multiple_steps_with_cycle::<
             ark_pallas::PallasConfig,
             ark_vesta::VestaConfig,
@@ -186,17 +200,10 @@ pub(crate) mod bitcoin_fold_tests {
         C1: CommitmentScheme<Projective<G1>, SetupAux = ()>,
         C2: CommitmentScheme<Projective<G2>, SetupAux = ()>,
     {
-        let filter = filter::Targets::new().with_target(NOVA_TARGET, tracing::Level::DEBUG);
-        let _guard = tracing_subscriber::registry()
-            .with(
-                tracing_subscriber::fmt::layer().with_span_events(FmtSpan::ENTER | FmtSpan::CLOSE),
-            )
-            .with(filter)
-            .set_default();
-
         let ro_config = poseidon_config();
 
-        let circuit = CubicCircuit::<G1::ScalarField>(PhantomData);
+        let circuit = BitcoinHeaderCircuit::<G1::ScalarField>(PhantomData);
+        let heights = []
         let z_0 = vec![G1::ScalarField::ONE];
         let num_steps = 3;
 
@@ -218,8 +225,8 @@ pub(crate) mod bitcoin_fold_tests {
 
         assert_eq!(&recursive_snark.z_i()[0], &G1::ScalarField::from(44739235));
         Ok(())
-    }*/
-}
+    }
+}*/
 
 #[cfg(test)]
 pub(crate) mod cubic_tests {
