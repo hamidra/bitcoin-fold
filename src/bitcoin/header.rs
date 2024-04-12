@@ -44,43 +44,7 @@ impl BitcoinHeader {
 pub(crate) mod test {
     use super::BitcoinHeader;
     use crate::bitcoin::block_data::BlockReader;
-
-    static TEST_JSON_RPC: &str = r#"[
-        {
-          "hash": "0000000000000000000219957045483495e40610b47cd600152ec76e256ba523",
-          "confirmations": 4,
-          "height": 838637,
-          "version": 643129344,
-          "versionHex": "26556000",
-          "merkleroot": "08272fbbd70ae8357031e14af3aa52ff731cc66841b089b6d4e5dba6241acc02",
-          "time": 1712770500,
-          "mediantime": 1712769033,
-          "nonce": 3878033683,
-          "bits": "170362d3",
-          "difficulty": 83126997340024.61,
-          "chainwork": "00000000000000000000000000000000000000007399bba0f3fa18aa519f5160",
-          "nTx": 3734,
-          "previousblockhash": "00000000000000000000bf21b8f732f51742fe4961f69e9373dae71d31062038",
-          "nextblockhash": "0000000000000000000033626df1e30e05522c90643dbf33113d684465d53fc6"
-        },
-        {
-          "hash": "0000000000000000000033626df1e30e05522c90643dbf33113d684465d53fc6",
-          "confirmations": 3,
-          "height": 838638,
-          "version": 813080576,
-          "versionHex": "3076a000",
-          "merkleroot": "d91c9095632f82e55a7e34fd955dbfbef0d5275393815afc76b3f4ac7bec7aeb",
-          "time": 1712770854,
-          "mediantime": 1712769105,
-          "nonce": 4255188596,
-          "bits": "170362d3",
-          "difficulty": 83126997340024.61,
-          "chainwork": "0000000000000000000000000000000000000000739a073bc2bab6e38bceec80",
-          "nTx": 3394,
-          "previousblockhash": "0000000000000000000219957045483495e40610b47cd600152ec76e256ba523",
-          "nextblockhash": "000000000000000000034c4c2caedc73b08bd64a6ffe4ae3f5852f9369a15a9d"
-        }
-      ]"#;
+    use crate::bitcoin::data::test_json::TEST_JSON_RPC;
 
     #[test]
     fn zero_header_into_bytes() {
