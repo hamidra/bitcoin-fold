@@ -8,7 +8,8 @@ use std::io::BufReader;
 use std::path::Path;
 use thiserror::Error;
 
-const TEST_DATA_PATH: &str = "/Users/hra/Workspace/Code/layerX/bitcoin-fold/src/bitcoin/data.json";
+const TEST_DATA_PATH: &str =
+    "/Users/hra/Workspace/Code/layerX/bitcoin-fold/src/bitcoin/data/data.json";
 
 #[derive(Error, Debug)]
 #[error("transparent")]
@@ -36,14 +37,11 @@ pub struct BlockReader {
 }
 
 impl BlockReader {
-    fn new(data_file_path: &str) -> Result<BlockReader, Box<dyn ErrorTrait>> {
+    pub fn new_from_file(data_file_path: &str) -> Result<BlockReader, Box<dyn ErrorTrait>> {
         let path = Path::new(data_file_path);
         let file = File::open(&path)?;
         let reader = BufReader::new(file);
-        let headers: Vec<BlockHeaderRpc> = serde_json::from_reader(reader).unwrap_or_else(|e| {
-            println!("{e}");
-            Vec::new()
-        });
+        let headers: Vec<BlockHeaderRpc> = serde_json::from_reader(reader)?;
         let mut headers_rpc = HashMap::new();
         for header in headers {
             headers_rpc.insert(header.height, header);
@@ -51,7 +49,16 @@ impl BlockReader {
         Ok(BlockReader { headers_rpc })
     }
 
-    fn get_block_header(&self, height: u32) -> Result<BitcoinHeader, Box<dyn ErrorTrait>> {
+    pub fn new_from_json(json: &str) -> Result<BlockReader, Box<dyn ErrorTrait>> {
+        let headers: Vec<BlockHeaderRpc> = serde_json::from_str(json)?;
+        let mut headers_rpc = HashMap::new();
+        for header in headers {
+            headers_rpc.insert(header.height, header);
+        }
+        Ok(BlockReader { headers_rpc })
+    }
+
+    pub fn get_block_header(&self, height: u32) -> Result<BitcoinHeader, Box<dyn ErrorTrait>> {
         if let Some(header) = self.headers_rpc.get(&height) {
             let header = header.clone();
             let mut header_internal = BitcoinHeader {
@@ -62,7 +69,9 @@ impl BlockReader {
                 target_bits: header.bits,
                 nonce: header.nonce,
             };
-            // convert hashs from rpc to internal format (hash in rpc results are returned in reverse order)
+
+            // Note: All returned hash values by json-RPC are reversed in reversed order, and need to be transformed back into internal format (reversed) before being used.
+            // Ref: https://btcinformation.org/en/glossary/rpc-byte-order
             header_internal.hash_prev_block.reverse();
             header_internal.hash_merkle_root.reverse();
 
@@ -79,7 +88,7 @@ pub(crate) mod test {
 
     #[test]
     fn read_block_headers_in_rpc_format() {
-        let reader = BlockReader::new(TEST_DATA_PATH).unwrap();
+        let reader = BlockReader::new_from_file(TEST_DATA_PATH).unwrap();
         let header_internal = reader.get_block_header(838637).unwrap();
         assert_eq!(header_internal.nonce, 3878033683);
     }
