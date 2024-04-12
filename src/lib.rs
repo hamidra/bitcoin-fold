@@ -1,5 +1,4 @@
 const NOVA_TARGET: &str = "layerX::bitfold";
-use std::fmt::Display;
 use std::marker::PhantomData;
 
 mod bitcoin;

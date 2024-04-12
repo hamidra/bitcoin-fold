@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
 use crate::bitcoin::BitcoinHeader;
-use std::backtrace::Backtrace;
 use std::collections::HashMap;
 use std::error::Error as ErrorTrait;
 use std::fs::File;
@@ -52,7 +51,7 @@ impl BlockReader {
         Ok(BlockReader { headers_rpc })
     }
 
-    fn get_block_header_internal(&self, height: u32) -> Result<BitcoinHeader, Box<dyn ErrorTrait>> {
+    fn get_block_header(&self, height: u32) -> Result<BitcoinHeader, Box<dyn ErrorTrait>> {
         if let Some(header) = self.headers_rpc.get(&height) {
             let header = header.clone();
             let mut header_internal = BitcoinHeader {
@@ -79,9 +78,9 @@ pub(crate) mod test {
     use super::*;
 
     #[test]
-    fn read_block_headers_in_rpc_format_from() {
+    fn read_block_headers_in_rpc_format() {
         let reader = BlockReader::new(TEST_DATA_PATH).unwrap();
-        let header_internal = reader.get_block_header_internal(838637).unwrap();
+        let header_internal = reader.get_block_header(838637).unwrap();
         assert_eq!(header_internal.nonce, 3878033683);
     }
 }
