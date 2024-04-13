@@ -67,7 +67,7 @@ pub(crate) mod test {
 
         let header = block_reader.get_block_header(838637).unwrap();
         let bytes: Vec<u8> = header.to_bytes();
-        let expected_bytes = hex::decode("00605526382006311de7da73939ef66149fe4217f532f7b821bf0000000000000000000002cc1a24a6dbe5d4b689b04168c61c73ff52aaf34ae1317035e80ad7bb2f2708c4cd1666170362d3131926e7").unwrap();
+        let expected_bytes = hex::decode("00605526382006311de7da73939ef66149fe4217f532f7b821bf0000000000000000000002cc1a24a6dbe5d4b689b04168c61c73ff52aaf34ae1317035e80ad7bb2f2708c4cd1666d3620317131926e7").unwrap();
         assert_eq!(bytes, expected_bytes);
     }
 }

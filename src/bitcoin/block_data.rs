@@ -130,9 +130,9 @@ mod test {
         let headers = reader.get_block_headers().unwrap();
         let mut prev_hash = headers[0].1.hash_prev_block.clone();
         for (weight, header) in headers {
-            println!("{:?}", header.hash_prev_block);
-            println!("{:?}", prev_hash);
-            // assert!(&header.hash_prev_block, &prev_hash);
+            // verify chain hash
+            assert_eq!(header.hash_prev_block, prev_hash);
+
             let header_bytes = header.to_bytes();
             prev_hash = Sha256::digest(Sha256::digest(header_bytes).to_vec()).to_vec();
         }

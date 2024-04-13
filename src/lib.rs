@@ -227,7 +227,7 @@ pub(crate) mod bitcoin_fold_tests {
             .map(|byte| G1::ScalarField::from(byte.clone()))
             .collect();
 
-        let num_steps = 1; //block_headers.len();
+        let num_steps = block_headers.len();
 
         println!("-> IVC started!");
 
