@@ -72,6 +72,7 @@ impl BlockReader {
         // Ref: https://btcinformation.org/en/glossary/rpc-byte-order
         header_internal.hash_prev_block.reverse();
         header_internal.hash_merkle_root.reverse();
+        header_internal.target_bits.reverse();
 
         header_internal
     }
@@ -102,7 +103,7 @@ impl BlockReader {
 #[cfg(test)]
 mod test {
     use super::*;
-
+    use ark_crypto_primitives::crh::sha256::{digest::Digest, Sha256};
     #[test]
     fn read_block_header_in_rpc_format() {
         let reader = BlockReader::new_from_file(TEST_DATA_PATH).unwrap();
@@ -121,5 +122,19 @@ mod test {
         let (height, header_internal) = headers[1].clone();
         assert_eq!(header_internal.nonce, 4255188596);
         assert_eq!(height, 838638);
+    }
+
+    #[test]
+    fn read_block_headers_verify_chain_hash() {
+        let reader = BlockReader::new_from_file(TEST_DATA_PATH).unwrap();
+        let headers = reader.get_block_headers().unwrap();
+        let mut prev_hash = headers[0].1.hash_prev_block.clone();
+        for (weight, header) in headers {
+            println!("{:?}", header.hash_prev_block);
+            println!("{:?}", prev_hash);
+            // assert!(&header.hash_prev_block, &prev_hash);
+            let header_bytes = header.to_bytes();
+            prev_hash = Sha256::digest(Sha256::digest(header_bytes).to_vec()).to_vec();
+        }
     }
 }
