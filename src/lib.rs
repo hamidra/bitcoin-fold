@@ -104,9 +104,10 @@ impl<F: PrimeField> StepCircuit<F> for BitcoinHeaderCircuit<F> {
 #[cfg(test)]
 pub(crate) mod bitcoin_fold_tests {
     use super::*;
-    use crate::bitcoin::block_data::BlockReader;
+    use crate::bitcoin::block_data::{self, BlockReader};
     use crate::bitcoin::data::test_json::TEST_JSON_RPC;
     use ark_crypto_primitives::crh::CRHScheme;
+    use nexus_nova::circuits;
 
     #[test]
     fn ivc_base_step() {
@@ -128,8 +129,6 @@ pub(crate) mod bitcoin_fold_tests {
         C1: CommitmentScheme<Projective<G1>, SetupAux = ()>,
         C2: CommitmentScheme<Projective<G2>, SetupAux = ()>,
     {
-        let ro_config = poseidon_config();
-
         // read a test block
         let block_reader = BlockReader::new_from_json(TEST_JSON_RPC).unwrap();
         let header = block_reader.get_block_header(838637).unwrap();
@@ -138,6 +137,8 @@ pub(crate) mod bitcoin_fold_tests {
             header: header.clone(),
             _p: PhantomData,
         };
+
+        let ro_config = poseidon_config();
 
         // pass in previous block hash
         let z_0: Vec<G1::ScalarField> = header
@@ -181,7 +182,7 @@ pub(crate) mod bitcoin_fold_tests {
     }
 
     #[test]
-    /*fn ivc_multiple_steps() {
+    fn ivc_multiple_steps() {
         ivc_multiple_steps_with_cycle::<
             ark_pallas::PallasConfig,
             ark_vesta::VestaConfig,
@@ -200,12 +201,35 @@ pub(crate) mod bitcoin_fold_tests {
         C1: CommitmentScheme<Projective<G1>, SetupAux = ()>,
         C2: CommitmentScheme<Projective<G2>, SetupAux = ()>,
     {
+        // load headers data
+        let block_reader = BlockReader::new_from_json(TEST_JSON_RPC).unwrap();
+        let block_headers = block_reader.get_block_headers().unwrap();
+        let block_headers: Vec<BitcoinHeader> = block_headers
+            .into_iter()
+            .map(|(_, header)| header)
+            .collect();
+
+        // create step circuits
+        let mut step_circuits: Vec<BitcoinHeaderCircuit<G1::ScalarField>> = block_headers
+            .iter()
+            .map(|header| BitcoinHeaderCircuit {
+                header: header.clone(),
+                _p: PhantomData,
+            })
+            .collect();
+
         let ro_config = poseidon_config();
 
-        let circuit = BitcoinHeaderCircuit::<G1::ScalarField>(PhantomData);
-        let heights = []
-        let z_0 = vec![G1::ScalarField::ONE];
-        let num_steps = 3;
+        // pass in previous block hash of the 1st block
+        let z_0: Vec<G1::ScalarField> = block_headers[0]
+            .hash_prev_block
+            .iter()
+            .map(|byte| G1::ScalarField::from(byte.clone()))
+            .collect();
+
+        let num_steps = 1; //block_headers.len();
+
+        println!("-> IVC started!");
 
         let params = PublicParams::<
             G1,
@@ -213,22 +237,36 @@ pub(crate) mod bitcoin_fold_tests {
             C1,
             C2,
             PoseidonSponge<G1::ScalarField>,
-            CubicCircuit<G1::ScalarField>,
-        >::setup(ro_config, &circuit, &(), &())?;
+            BitcoinHeaderCircuit<G1::ScalarField>,
+        >::setup(ro_config, &step_circuits[0], &(), &())?;
+        println!("-> Setup is done!");
 
         let mut recursive_snark = IVCProof::new(&z_0);
 
-        for _ in 0..num_steps {
-            recursive_snark = IVCProof::prove_step(recursive_snark, &params, &circuit)?;
+        for i in 0..num_steps {
+            recursive_snark = IVCProof::prove_step(recursive_snark, &params, &step_circuits[i])?;
+            println!("-> step {i} proof was folded!");
         }
-        recursive_snark.verify(&params, num_steps).unwrap();
 
-        assert_eq!(&recursive_snark.z_i()[0], &G1::ScalarField::from(44739235));
+        recursive_snark.verify(&params, num_steps).unwrap();
+        println!("-> Folded Proof for steps 0->{num_steps} is verified!");
+
+        let last_block_header = &block_headers[num_steps - 1];
+        // check z_i is equal to the final block hash
+        let header_digest =
+            <Sha256 as CRHScheme>::evaluate(&(), last_block_header.to_bytes()).unwrap();
+        let digest_digest = <Sha256 as CRHScheme>::evaluate(&(), header_digest).unwrap();
+        let digest_digest_scalars: Vec<G1::ScalarField> = digest_digest
+            .iter()
+            .map(|byte| G1::ScalarField::from(byte.clone()))
+            .collect();
+        assert_eq!(recursive_snark.z_i(), digest_digest_scalars);
+
         Ok(())
     }
-}*/
+}
 
-#[cfg(test)]
+/*#[cfg(test)]
 pub(crate) mod cubic_tests {
 
     use super::*;
@@ -355,4 +393,4 @@ pub(crate) mod cubic_tests {
         assert_eq!(&recursive_snark.z_i()[0], &G1::ScalarField::from(44739235));
         Ok(())
     }
-}
+}*/
