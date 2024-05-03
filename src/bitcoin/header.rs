@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 /// ref code: https://github.com/bitcoin/bitcoin/blob/b5d21182e5a66110ce2796c2c99da39c8ebf0d72/src/primitives/block.h#L21
 /// ref doc: https://developer.bitcoin.org/reference/block_chain.html
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BitcoinHeader {
     pub version: u32,
     pub hash_prev_block: Vec<u8>,
@@ -40,6 +40,19 @@ impl BitcoinHeader {
     }
 }
 
+impl Default for BitcoinHeader {
+    fn default() -> Self {
+        BitcoinHeader {
+            version: 0u32,
+            hash_prev_block: [0; 32].to_vec(),
+            hash_merkle_root: [0; 32].to_vec(),
+            timestamp: 0u32,
+            target_bits: [0; 4].to_vec(),
+            nonce: 0u32,
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod test {
     use super::BitcoinHeader;
@@ -48,14 +61,7 @@ pub(crate) mod test {
 
     #[test]
     fn zero_header_into_bytes() {
-        let header = BitcoinHeader {
-            version: 0u32,
-            hash_prev_block: [0; 32].to_vec(),
-            hash_merkle_root: [0; 32].to_vec(),
-            timestamp: 0u32,
-            target_bits: [0; 4].to_vec(),
-            nonce: 0u32,
-        };
+        let header = BitcoinHeader::default();
         let bytes: Vec<u8> = header.to_bytes();
         let expected_bytes: Vec<u8> = [0u8; 80].to_vec();
         assert_eq!(bytes, expected_bytes);

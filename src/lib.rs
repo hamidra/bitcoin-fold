@@ -2,12 +2,17 @@ const NOVA_TARGET: &str = "layerX::bitfold";
 use std::marker::PhantomData;
 
 mod bitcoin;
-use bitcoin::BitcoinHeader;
-use nexus_nova::circuits::nova::sequential::*;
-use nexus_nova::circuits::nova::*;
-use nexus_nova::commitment::CommitmentScheme;
-use nexus_nova::folding::nova::cyclefold;
-use nexus_nova::{pedersen::PedersenCommitment, poseidon_config};
+pub use bitcoin::BitcoinHeader;
+use bitcoin::BlockReader;
+
+// nova
+use nexus_nova::{
+    circuits::nova::{sequential::*, StepCircuit},
+    commitment::CommitmentScheme,
+    pedersen::PedersenCommitment,
+    poseidon_config,
+};
+use std::error::Error;
 
 // ark
 use ark_crypto_primitives::{
@@ -25,7 +30,10 @@ use ark_crypto_primitives::{
         Absorb, CryptographicSponge,
     },
 };
-use ark_ec::short_weierstrass::{Projective, SWCurveConfig};
+use ark_ec::{
+    short_weierstrass::{Projective, SWCurveConfig},
+    CurveConfig,
+};
 use ark_ff::{AdditiveGroup, Field, PrimeField};
 use ark_r1cs_std::{
     fields::{fp::FpVar, FieldVar},
@@ -33,7 +41,7 @@ use ark_r1cs_std::{
     R1CSVar,
 };
 use ark_relations::r1cs::{ConstraintSystem, ConstraintSystemRef, SynthesisError, SynthesisMode};
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, SerializationError};
 use tracing_subscriber::{
     filter, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt,
 };
@@ -101,26 +109,75 @@ impl<F: PrimeField> StepCircuit<F> for BitcoinHeaderCircuit<F> {
     }
 }
 
+/*pub struct ProofSerializer<G1, G2, C1, C2, RO, SC>(PhantomData<G1, G2, C1, C2, RO, SC>);
+
+impl<G1, G2, C1, C2, RO, SC> ProofSerializer
+where
+    G1: SWCurveConfig,
+    G2: SWCurveConfig,
+    C1: CommitmentScheme<Projective<G1>>,
+    C2: CommitmentScheme<Projective<G2>>,
+    RO: CryptographicSponge + Send + Sync,
+    RO::Config: CanonicalSerialize + CanonicalDeserialize + Sync,
+    SC: StepCircuit<G1::ScalarField>,
+{
+    pub fn serialize_public_params(pp: PublicParams<G1, G2, C1, C2, RO, SC>) {
+        let buffer = Vec::new();
+        pp.serialize_compressed(&mut buffer);
+        buffer
+    }
+    pub fn deserialize_public_params(
+        bytes: Vec<u8>,
+    ) -> Result<PublicParams<G1, G2, C1, C2, RO, SC>, SerializationError> {
+        PublicParams::deserialize_compressed(&bytes[..])
+    }
+
+    pub fn serialize_proof(ivc_proof: IVCProof<G1, G2, C1, C2, RO, SC>) {
+        let buffer = Vec::new();
+        ivc_proof.serialize_compressed(buffer);
+        buffer
+    }
+
+    pub fn deserialize_proof(
+        bytes: Vec<u8>,
+    ) -> Result<IVCProof<G1, G2, C1, C2, RO, SC>, SerializationError> {
+        IVCProof::deserialize_compressed(&bytes[..])
+    }
+}*/
+
+/*pub struct BitcoinIVC<G1, G2, C1, C2, RO, SC>
+where
+    G1: SWCurveConfig,
+    G2: SWCurveConfig,
+    C1: CommitmentScheme<Projective<G1>>,
+    C2: CommitmentScheme<Projective<G2>>,
+    RO: CryptographicSponge + Send + Sync,
+    RO::Config: CanonicalSerialize + CanonicalDeserialize + Sync,
+    SC: StepCircuit<G1::ScalarField>,
+{
+    initial_height: usize,
+    height: usize,
+    params: PublicParams<G1, G2, C1, C2, RO, SC>,
+    proof: IVCProof<G1, G2, C1, C2, RO, SC>,
+}
+
+impl BitcoinIVC<G1, G2, C1, C2, RO, SC> {
+    pub fn setup(self) -> Self {
+        self
+    }
+}*/
+
 #[cfg(test)]
 pub(crate) mod bitcoin_fold_tests {
     use super::*;
-    use crate::bitcoin::block_data::{self, BlockReader};
     use crate::bitcoin::data::test_json::TEST_JSON_RPC;
+    use crate::bitcoin::BlockReader;
     use ark_crypto_primitives::crh::CRHScheme;
     use nexus_nova::circuits;
 
-    #[test]
-    fn ivc_base_step() {
-        ivc_base_step_with_cycle::<
-            ark_pallas::PallasConfig,
-            ark_vesta::VestaConfig,
-            PedersenCommitment<ark_pallas::Projective>,
-            PedersenCommitment<ark_vesta::Projective>,
-        >()
-        .unwrap()
-    }
-
-    fn ivc_base_step_with_cycle<G1, G2, C1, C2>() -> Result<(), cyclefold::Error>
+    fn bitcoin_fold_with_cycles<G1, G2, C1, C2>(
+        header_chain: Vec<BitcoinHeader>,
+    ) -> Result<(), Box<dyn Error>>
     where
         G1: SWCurveConfig,
         G2: SWCurveConfig<BaseField = G1::ScalarField, ScalarField = G1::BaseField>,
@@ -129,26 +186,22 @@ pub(crate) mod bitcoin_fold_tests {
         C1: CommitmentScheme<Projective<G1>, SetupAux = ()>,
         C2: CommitmentScheme<Projective<G2>, SetupAux = ()>,
     {
-        // read a test block
-        let block_reader = BlockReader::new_from_json(TEST_JSON_RPC).unwrap();
-        let header = block_reader.get_block_header(838637).unwrap();
-
-        let circuit = BitcoinHeaderCircuit::<G1::ScalarField> {
-            header: header.clone(),
+        let mut circuit_for_setup = BitcoinHeaderCircuit::<G1::ScalarField> {
+            header: BitcoinHeader::default(),
             _p: PhantomData,
         };
 
         let ro_config = poseidon_config();
 
         // pass in previous block hash
-        let z_0: Vec<G1::ScalarField> = header
+        let z_0: Vec<G1::ScalarField> = header_chain[0]
             .hash_prev_block
             .iter()
             .map(|byte| G1::ScalarField::from(byte.clone()))
             .collect();
 
         // run IVC for one step
-        let num_steps = 1;
+        let num_steps = header_chain.len();
 
         println!("-> IVC started!");
 
@@ -159,18 +212,34 @@ pub(crate) mod bitcoin_fold_tests {
             C2,
             PoseidonSponge<G1::ScalarField>,
             BitcoinHeaderCircuit<G1::ScalarField>,
-        >::setup(ro_config, &circuit, &(), &())?;
+        >::setup(ro_config, &circuit_for_setup, &(), &())?;
         println!("-> Setup is done!");
 
-        let mut recursive_snark = IVCProof::new(&z_0);
-        recursive_snark = recursive_snark.prove_step(&params, &circuit)?;
-        println!("-> Proof is generated!");
+        let mut recursive_snark: IVCProof<
+            G1,
+            G2,
+            C1,
+            C2,
+            PoseidonSponge<<G1 as CurveConfig>::ScalarField>,
+            BitcoinHeaderCircuit<<G1 as CurveConfig>::ScalarField>,
+        > = IVCProof::new(&z_0);
+
+        for (header) in header_chain.clone() {
+            let circuit = BitcoinHeaderCircuit::<G1::ScalarField> {
+                header: header,
+                _p: PhantomData,
+            };
+            recursive_snark = recursive_snark.prove_step(&params, &circuit)?;
+            println!("-> Proof is generated!");
+        }
 
         recursive_snark.verify(&params, num_steps).unwrap();
         println!("-> Proof is verified!");
 
         // check z_i is equal to the final block hash
-        let header_digest = <Sha256 as CRHScheme>::evaluate(&(), header.to_bytes()).unwrap();
+        let header_digest =
+            <Sha256 as CRHScheme>::evaluate(&(), header_chain[header_chain.len() - 1].to_bytes())
+                .unwrap();
         let digest_digest = <Sha256 as CRHScheme>::evaluate(&(), header_digest).unwrap();
         let digest_digest_scalars: Vec<G1::ScalarField> = digest_digest
             .iter()
@@ -182,25 +251,21 @@ pub(crate) mod bitcoin_fold_tests {
     }
 
     #[test]
-    fn ivc_multiple_steps() {
-        ivc_multiple_steps_with_cycle::<
+    fn bitcoin_fold_one_step() {
+        // read a test block
+        let block_reader = BlockReader::new_from_json(TEST_JSON_RPC).unwrap();
+        let header = block_reader.get_block_header(838637).unwrap();
+        bitcoin_fold_with_cycles::<
             ark_pallas::PallasConfig,
             ark_vesta::VestaConfig,
             PedersenCommitment<ark_pallas::Projective>,
             PedersenCommitment<ark_vesta::Projective>,
-        >()
-        .unwrap()
+        >(vec![header])
+        .unwrap();
     }
 
-    fn ivc_multiple_steps_with_cycle<G1, G2, C1, C2>() -> Result<(), cyclefold::Error>
-    where
-        G1: SWCurveConfig,
-        G2: SWCurveConfig<BaseField = G1::ScalarField, ScalarField = G1::BaseField>,
-        G1::BaseField: PrimeField + Absorb,
-        G2::BaseField: PrimeField + Absorb,
-        C1: CommitmentScheme<Projective<G1>, SetupAux = ()>,
-        C2: CommitmentScheme<Projective<G2>, SetupAux = ()>,
-    {
+    #[test]
+    fn bitcoin_fold_multiple_steps() {
         // load headers data
         let block_reader = BlockReader::new_from_json(TEST_JSON_RPC).unwrap();
         let block_headers = block_reader.get_block_headers().unwrap();
@@ -209,188 +274,12 @@ pub(crate) mod bitcoin_fold_tests {
             .map(|(_, header)| header)
             .collect();
 
-        // create step circuits
-        let mut step_circuits: Vec<BitcoinHeaderCircuit<G1::ScalarField>> = block_headers
-            .iter()
-            .map(|header| BitcoinHeaderCircuit {
-                header: header.clone(),
-                _p: PhantomData,
-            })
-            .collect();
-
-        let ro_config = poseidon_config();
-
-        // pass in previous block hash of the 1st block
-        let z_0: Vec<G1::ScalarField> = block_headers[0]
-            .hash_prev_block
-            .iter()
-            .map(|byte| G1::ScalarField::from(byte.clone()))
-            .collect();
-
-        let num_steps = block_headers.len();
-
-        println!("-> IVC started!");
-
-        let params = PublicParams::<
-            G1,
-            G2,
-            C1,
-            C2,
-            PoseidonSponge<G1::ScalarField>,
-            BitcoinHeaderCircuit<G1::ScalarField>,
-        >::setup(ro_config, &step_circuits[0], &(), &())?;
-        println!("-> Setup is done!");
-
-        let mut recursive_snark = IVCProof::new(&z_0);
-
-        for i in 0..num_steps {
-            recursive_snark = IVCProof::prove_step(recursive_snark, &params, &step_circuits[i])?;
-            println!("-> step {i} proof was folded!");
-        }
-
-        recursive_snark.verify(&params, num_steps).unwrap();
-        println!("-> Folded Proof for steps 0->{num_steps} is verified!");
-
-        let last_block_header = &block_headers[num_steps - 1];
-        // check z_i is equal to the final block hash
-        let header_digest =
-            <Sha256 as CRHScheme>::evaluate(&(), last_block_header.to_bytes()).unwrap();
-        let digest_digest = <Sha256 as CRHScheme>::evaluate(&(), header_digest).unwrap();
-        let digest_digest_scalars: Vec<G1::ScalarField> = digest_digest
-            .iter()
-            .map(|byte| G1::ScalarField::from(byte.clone()))
-            .collect();
-        assert_eq!(recursive_snark.z_i(), digest_digest_scalars);
-
-        Ok(())
+        bitcoin_fold_with_cycles::<
+            ark_pallas::PallasConfig,
+            ark_vesta::VestaConfig,
+            PedersenCommitment<ark_pallas::Projective>,
+            PedersenCommitment<ark_vesta::Projective>,
+        >(block_headers)
+        .unwrap()
     }
 }
-
-/*#[cfg(test)]
-pub(crate) mod cubic_tests {
-
-    use super::*;
-
-    #[derive(Debug, Default)]
-    pub struct CubicCircuit<F: Field>(PhantomData<F>);
-
-    impl<F: PrimeField> StepCircuit<F> for CubicCircuit<F> {
-        const ARITY: usize = 1;
-
-        fn generate_constraints(
-            &self,
-            _: ConstraintSystemRef<F>,
-            _: &FpVar<F>,
-            z: &[FpVar<F>],
-        ) -> Result<Vec<FpVar<F>>, SynthesisError> {
-            assert_eq!(z.len(), 1);
-
-            let x = &z[0];
-
-            let x_square = x.square()?;
-            let x_cube = x_square * x;
-
-            let y: FpVar<F> = x + x_cube + &FpVar::Constant(5u64.into());
-
-            Ok(vec![y])
-        }
-    }
-
-    #[test]
-    fn ivc_base_step() {
-        ivc_base_step_with_cycle::<
-            ark_pallas::PallasConfig,
-            ark_vesta::VestaConfig,
-            PedersenCommitment<ark_pallas::Projective>,
-            PedersenCommitment<ark_vesta::Projective>,
-        >()
-        .unwrap()
-    }
-
-    fn ivc_base_step_with_cycle<G1, G2, C1, C2>() -> Result<(), cyclefold::Error>
-    where
-        G1: SWCurveConfig,
-        G2: SWCurveConfig<BaseField = G1::ScalarField, ScalarField = G1::BaseField>,
-        G1::BaseField: PrimeField + Absorb,
-        G2::BaseField: PrimeField + Absorb,
-        C1: CommitmentScheme<Projective<G1>, SetupAux = ()>,
-        C2: CommitmentScheme<Projective<G2>, SetupAux = ()>,
-    {
-        let ro_config = poseidon_config();
-
-        let circuit = CubicCircuit::<G1::ScalarField>(PhantomData);
-        let z_0 = vec![G1::ScalarField::ONE];
-        let num_steps = 1;
-
-        let params = PublicParams::<
-            G1,
-            G2,
-            C1,
-            C2,
-            PoseidonSponge<G1::ScalarField>,
-            CubicCircuit<G1::ScalarField>,
-        >::setup(ro_config, &circuit, &(), &())?;
-
-        let mut recursive_snark = IVCProof::new(&z_0);
-        recursive_snark = recursive_snark.prove_step(&params, &circuit)?;
-        recursive_snark.verify(&params, num_steps).unwrap();
-
-        assert_eq!(&recursive_snark.z_i()[0], &G1::ScalarField::from(7));
-
-        Ok(())
-    }
-
-    #[test]
-    fn ivc_multiple_steps() {
-        ivc_multiple_steps_with_cycle::<
-            ark_pallas::PallasConfig,
-            ark_vesta::VestaConfig,
-            PedersenCommitment<ark_pallas::Projective>,
-            PedersenCommitment<ark_vesta::Projective>,
-        >()
-        .unwrap()
-    }
-
-    fn ivc_multiple_steps_with_cycle<G1, G2, C1, C2>() -> Result<(), cyclefold::Error>
-    where
-        G1: SWCurveConfig,
-        G2: SWCurveConfig<BaseField = G1::ScalarField, ScalarField = G1::BaseField>,
-        G1::BaseField: PrimeField + Absorb,
-        G2::BaseField: PrimeField + Absorb,
-        C1: CommitmentScheme<Projective<G1>, SetupAux = ()>,
-        C2: CommitmentScheme<Projective<G2>, SetupAux = ()>,
-    {
-        let filter = filter::Targets::new().with_target(NOVA_TARGET, tracing::Level::DEBUG);
-        let _guard = tracing_subscriber::registry()
-            .with(
-                tracing_subscriber::fmt::layer().with_span_events(FmtSpan::ENTER | FmtSpan::CLOSE),
-            )
-            .with(filter)
-            .set_default();
-
-        let ro_config = poseidon_config();
-
-        let circuit = CubicCircuit::<G1::ScalarField>(PhantomData);
-        let z_0 = vec![G1::ScalarField::ONE];
-        let num_steps = 3;
-
-        let params = PublicParams::<
-            G1,
-            G2,
-            C1,
-            C2,
-            PoseidonSponge<G1::ScalarField>,
-            CubicCircuit<G1::ScalarField>,
-        >::setup(ro_config, &circuit, &(), &())?;
-
-        let mut recursive_snark = IVCProof::new(&z_0);
-
-        for _ in 0..num_steps {
-            recursive_snark = IVCProof::prove_step(recursive_snark, &params, &circuit)?;
-        }
-        recursive_snark.verify(&params, num_steps).unwrap();
-
-        assert_eq!(&recursive_snark.z_i()[0], &G1::ScalarField::from(44739235));
-        Ok(())
-    }
-}*/
