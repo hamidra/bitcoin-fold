@@ -1,4 +1,8 @@
 const NOVA_TARGET: &str = "layerX::bitfold";
+
+// for profiling
+use std::time::Instant;
+
 use std::marker::PhantomData;
 
 mod bitcoin;
@@ -6,8 +10,12 @@ pub use bitcoin::BitcoinHeader;
 use bitcoin::BlockReader;
 
 // nova
+use ark_spartan::polycommitments::{zeromorph::Zeromorph, PolyCommitmentScheme};
 use nexus_nova::{
-    circuits::nova::{sequential::*, StepCircuit},
+    circuits::nova::{
+        sequential::{compression::*, *},
+        StepCircuit,
+    },
     commitment::CommitmentScheme,
     pedersen::PedersenCommitment,
     poseidon_config,
@@ -42,10 +50,16 @@ use ark_r1cs_std::{
 };
 use ark_relations::r1cs::{ConstraintSystem, ConstraintSystemRef, SynthesisError, SynthesisMode};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, SerializationError};
+
+// ToDo: replace with a production ready crypto-rng
+use ark_std::test_rng;
+
+use ark_bn254::{g1::Config as Bn254Config, Bn254};
+use ark_grumpkin::{GrumpkinConfig, Projective as GrumpkinProjective};
+
 use tracing_subscriber::{
     filter, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt,
 };
-
 #[derive(Debug, Default)]
 pub struct BitcoinHeaderCircuit<F: Field> {
     header: BitcoinHeader,
@@ -104,7 +118,6 @@ impl<F: PrimeField> StepCircuit<F> for BitcoinHeaderCircuit<F> {
             z_out.push(fp_var);
         }
 
-        //let previous_block_hash = z.
         Ok(z_out)
     }
 }
@@ -175,7 +188,58 @@ pub(crate) mod bitcoin_fold_tests {
     use ark_crypto_primitives::crh::CRHScheme;
     use nexus_nova::circuits;
 
-    fn bitcoin_fold_with_cycles<G1, G2, C1, C2>(
+    fn setup_srs_params<G1, G2, PC, C2, RO, SC>(
+        ro_config: RO::Config,
+        step_circuit: &SC,
+    ) -> (PC::SRS, PublicParams<G1, G2, PVC<G1, PC>, C2, RO, SC>)
+    where
+        G1: SWCurveConfig,
+        G2: SWCurveConfig<BaseField = G1::ScalarField, ScalarField = G1::BaseField>,
+        G1::BaseField: PrimeField + Absorb,
+        G2::BaseField: PrimeField + Absorb,
+        PC: PolyCommitmentScheme<Projective<G1>>,
+        PC::Commitment: Copy + Into<Projective<G1>> + From<Projective<G1>>,
+        C2: CommitmentScheme<Projective<G2>, SetupAux = ()>,
+        RO: SpongeWithGadget<G1::ScalarField> + Send + Sync,
+        RO::Var: CryptographicSpongeVar<G1::ScalarField, RO, Parameters = RO::Config>,
+        RO::Config: CanonicalSerialize + CanonicalDeserialize + Clone + Sync,
+        SC: StepCircuit<G1::ScalarField>,
+    {
+        let mut rng = test_rng();
+
+        let mut start = Instant::now();
+        let (shape, _) = SetupParams::<(G1, G2, PVC<G1, PC>, C2, RO, SC)>::get_shape(
+            ro_config.clone(),
+            &step_circuit,
+        )
+        .unwrap();
+        /*       println!("Extract_R1CS_SHAPE {} s", start.elapsed().as_secs());
+
+                let min_num_vars = SNARKKey::<G1, PC>::get_min_srs_size(&shape).unwrap();
+                println!("min_srs: {min_num_vars}");
+        */
+
+        // hardcoded min_num_vars, if circuit changes use commented code above to calculate the min required number.
+        let min_num_vars = 25;
+
+        let mut start = Instant::now();
+        let srs = PC::setup(min_num_vars, b"test_srs", &mut rng).unwrap();
+        println!("SETUP_SRS {} s", start.elapsed().as_secs());
+
+        start = Instant::now();
+        let params = PublicParams::<G1, G2, PVC<G1, PC>, C2, RO, SC>::setup(
+            ro_config,
+            &step_circuit,
+            &srs,
+            &(),
+        )
+        .expect("setup should not fail");
+        println!("SETUP_PUBLIC_PARAMS {} s", start.elapsed().as_secs());
+
+        (srs, params)
+    }
+
+    fn bitcoin_fold_with_cycles<G1, G2, PC, C2>(
         header_chain: Vec<BitcoinHeader>,
     ) -> Result<(), Box<dyn Error>>
     where
@@ -183,7 +247,8 @@ pub(crate) mod bitcoin_fold_tests {
         G2: SWCurveConfig<BaseField = G1::ScalarField, ScalarField = G1::BaseField>,
         G1::BaseField: PrimeField + Absorb,
         G2::BaseField: PrimeField + Absorb,
-        C1: CommitmentScheme<Projective<G1>, SetupAux = ()>,
+        PC: PolyCommitmentScheme<Projective<G1>>,
+        PC::Commitment: Copy + Into<Projective<G1>> + From<Projective<G1>>,
         C2: CommitmentScheme<Projective<G2>, SetupAux = ()>,
     {
         let mut circuit_for_setup = BitcoinHeaderCircuit::<G1::ScalarField> {
@@ -204,36 +269,36 @@ pub(crate) mod bitcoin_fold_tests {
         let num_steps = header_chain.len();
 
         println!("-> IVC started!");
-
-        let params = PublicParams::<
+        let mut start = Instant::now();
+        let (srs, params) = setup_srs_params::<
             G1,
             G2,
-            C1,
+            PC,
             C2,
             PoseidonSponge<G1::ScalarField>,
             BitcoinHeaderCircuit<G1::ScalarField>,
-        >::setup(ro_config, &circuit_for_setup, &(), &())?;
+        >(ro_config, &circuit_for_setup);
+        println!("SETUP_SRS_PARAMS {} s", start.elapsed().as_secs());
         println!("-> Setup is done!");
 
-        let mut recursive_snark: IVCProof<
-            G1,
-            G2,
-            C1,
-            C2,
-            PoseidonSponge<<G1 as CurveConfig>::ScalarField>,
-            BitcoinHeaderCircuit<<G1 as CurveConfig>::ScalarField>,
-        > = IVCProof::new(&z_0);
+        let mut nova_proof = IVCProof::new(&z_0);
 
         for (header) in header_chain.clone() {
             let circuit = BitcoinHeaderCircuit::<G1::ScalarField> {
                 header: header,
                 _p: PhantomData,
             };
-            recursive_snark = recursive_snark.prove_step(&params, &circuit)?;
+
+            start = Instant::now();
+            nova_proof = nova_proof.prove_step(&params, &circuit)?;
+            println!("NOVA_PROOF {} s", start.elapsed().as_secs());
+
             println!("-> Proof is generated!");
         }
 
-        recursive_snark.verify(&params, num_steps).unwrap();
+        start = Instant::now();
+        nova_proof.verify(&params, num_steps).unwrap();
+        println!("NOVA_PROOF_VERIFY {} s", start.elapsed().as_secs());
         println!("-> Proof is verified!");
 
         // check z_i is equal to the final block hash
@@ -245,7 +310,45 @@ pub(crate) mod bitcoin_fold_tests {
             .iter()
             .map(|byte| G1::ScalarField::from(byte.clone()))
             .collect();
-        assert_eq!(recursive_snark.z_i(), digest_digest_scalars);
+        assert_eq!(nova_proof.z_i(), digest_digest_scalars);
+
+        // compress IVCProof
+        start = Instant::now();
+        let key = SNARK::<
+            G1,
+            G2,
+            PC,
+            C2,
+            PoseidonSponge<G1::ScalarField>,
+            BitcoinHeaderCircuit<G1::ScalarField>,
+        >::setup(&params, &srs)
+        .unwrap();
+        println!("SPARTAN_SETUP { } s", start.elapsed().as_secs());
+
+        start = Instant::now();
+        let compressed_nova_proof = SNARK::<
+            G1,
+            G2,
+            PC,
+            C2,
+            PoseidonSponge<G1::ScalarField>,
+            BitcoinHeaderCircuit<G1::ScalarField>,
+        >::compress(&params, &key, nova_proof)
+        .unwrap();
+        println!("SPARTAN_PROOF { } s", start.elapsed().as_secs());
+
+        // verify compressed proof.
+        start = Instant::now();
+        SNARK::<
+            G1,
+            G2,
+            PC,
+            C2,
+            PoseidonSponge<G1::ScalarField>,
+            BitcoinHeaderCircuit<G1::ScalarField>,
+        >::verify(&key, &params, &compressed_nova_proof)
+        .unwrap();
+        println!("SPARTAN_VERIFY {}", start.elapsed().as_secs());
 
         Ok(())
     }
@@ -256,10 +359,10 @@ pub(crate) mod bitcoin_fold_tests {
         let block_reader = BlockReader::new_from_json(TEST_JSON_RPC).unwrap();
         let header = block_reader.get_block_header(838637).unwrap();
         bitcoin_fold_with_cycles::<
-            ark_pallas::PallasConfig,
-            ark_vesta::VestaConfig,
-            PedersenCommitment<ark_pallas::Projective>,
-            PedersenCommitment<ark_vesta::Projective>,
+            Bn254Config,
+            GrumpkinConfig,
+            Zeromorph<Bn254>,
+            PedersenCommitment<GrumpkinProjective>,
         >(vec![header])
         .unwrap();
     }
@@ -275,10 +378,10 @@ pub(crate) mod bitcoin_fold_tests {
             .collect();
 
         bitcoin_fold_with_cycles::<
-            ark_pallas::PallasConfig,
-            ark_vesta::VestaConfig,
-            PedersenCommitment<ark_pallas::Projective>,
-            PedersenCommitment<ark_vesta::Projective>,
+            Bn254Config,
+            GrumpkinConfig,
+            Zeromorph<Bn254>,
+            PedersenCommitment<GrumpkinProjective>,
         >(block_headers)
         .unwrap()
     }
