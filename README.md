@@ -2,7 +2,7 @@
 
 Bitfold offers Proof-Carrying-Headers for Bitcoin blockchain.
 
-## Proof Carrying Data (PCD)
+## What is Proof Carrying Data (PCD)
 
 Proof carrying data, also known as PCD, is a powerful cryptographic primitive that enables the generation of verifiable proofs for data resulting from a sequence of computations starting from an initial state. The main characteristic of PCD is that at each step of the computation, data and its proof can be utilized to construct the proof for the subsequent result. This recursive application of computation steps to proof carrying data allows untrusted parties to generate proofs not only for individual steps but also for the entire computation from its inception.
 
